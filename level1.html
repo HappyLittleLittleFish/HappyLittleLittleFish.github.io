@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+<head>
+</head>
+<body>
+<canvas id="canvas" width = "700" height="700"></canvas>
+</body>
+<div w3-include-html="level1.html"></div>
+<script id="vertex-shader-2d" type="notjs">
+  attribute vec4 a_position;
+  void main() {
+    gl_Position = a_position;
+  }
+</script>
+<script id="fragment-shader-2d" type="notjs">
+  precision highp float;
+
+  uniform vec2 iResolution;
+  uniform vec2 iMouse;
+  uniform float iTime;
+
+  #define float2 vec2
+  #define float3 vec3
+  #define float4 vec4
+  #define MAX_STEPS 300
+  #define SURF_DIST 1e-3
+  #define MAX_DIST 100.
+  #define PI 3.1415926
+  #define lerp mix
+  #define saturate(v) clamp(v,.0,.1)
+
+  mat2 Rot(float a) {
+      float s = sin(a);
+      float c = cos(a);
+      return mat2(c, -s, s, c);
+  }
+
+  float sdEllipsoid2(in float3 p, float3 r)
+{
+    float k1 = length(p/r);
+    return (k1-1.0)*min(min(r.x,r.y),r.z);
+}
+
+float sdSphere(float3 p, float s)
+{
+    return length(p) - s;
+}
+
+mat3 RotateToAxis(vec3 direction, vec3 ref){
+if(direction == ref)
+{
+return mat3(1,0,0,0,1,0,0,0,1);
+}
+vec3 u = normalize(cross(direction,ref));
+float c = dot(ref, direction)*(1./length(ref))*(1./length(direction));
+float s = length((cross(ref,direction)))*(1./length(ref))*(1./length(direction));
+
+return mat3(
+c+u.x*u.x*(1.-c),
+u.x*u.y*(1.-c)-u.z*s,
+u.x*u.z*(1.-c)+u.y*s,
+u.y*u.x*(1.-c)+u.z*s,
+c+u.y*u.y*(1.-c),
+u.y*u.z*(1.-c)-u.x*s,
+u.z*u.x*(1.-c)-u.y*s,
+u.z*u.y*(1.-c)+u.x*s,
+c+u.z*u.z*(1.-c));
+}
+
+mat3 RotateAroundAxis(vec3 axis, float theta){
+
+vec3 u = axis;
+float c = cos(theta);
+float s = sin(theta);
+
+return mat3(
+c+u.x*u.x*(1.-c),
+u.x*u.y*(1.-c)-u.z*s,
+u.x*u.z*(1.-c)+u.y*s,
+u.y*u.x*(1.-c)+u.z*s,
+c+u.y*u.y*(1.-c),
+u.y*u.z*(1.-c)-u.x*s,
+u.z*u.x*(1.-c)-u.y*s,
+u.z*u.y*(1.-c)+u.x*s,
+c+u.z*u.z*(1.-c));
+}
+
+
+float sdCone(vec3 p, float radius, float height, vec3 center, vec3 direction) {
+    p -= center;
+    mat3 rotation = RotateToAxis(direction, vec3(0.,1.,0.0));
+    p = rotation*p;
+    vec2 q = vec2(length(p.xz), p.y);
+    vec2 tip = q - vec2(0, height);
+    vec2 mantleDir = normalize(vec2(height, radius));
+    float mantle = dot(tip, mantleDir);
+    float d = max(mantle, -q.y);
+    float projected = dot(tip, vec2(mantleDir.y, -mantleDir.x));
+    
+    if ((height < q.y) && (projected < 0.)) {
+        d = max(d, length(tip));
+    }
+    if ((q.x > radius) && (projected > length(vec2(height, radius)))) {
+        d = max(d, length(q - vec2(radius, 0)));
+    }
+    return d;
+}
+
+float sdFish(float3 p, float scale, float t, out int where){    
+    float body = sdEllipsoid2(p, scale*float3(2.5,1,1));
+    float topfin = sdEllipsoid2(RotateAroundAxis(vec3(0.,0.,1.1), 0.48)*(p-scale*float3(0,0.7,0)), scale*float3(1.,0.5,0.1));
+    float botfin = sdEllipsoid2(RotateAroundAxis(vec3(0.,0.,1.1), -0.48)*(p+scale*float3(-1.,0.5,0.)), scale*float3(1.,0.4,0.1));
+
+    float leg1 = sdEllipsoid2(RotateAroundAxis(vec3(0.,0.,1.0), 1.2)*p-scale*vec3(-0.4,0.4,1.), scale*float3(0.2,0.5,0.1)); 
+    float leg2 = sdEllipsoid2(RotateAroundAxis(vec3(0.,0.,1.0), 1.2)*p-scale*vec3(-0.4,0.4,-1.), scale*float3(0.2,0.5,0.1)); 
+    float eye1 = sdSphere(p-scale*vec3(-1.6,0.35,-0.7), scale*0.15);
+    float eye2 = sdSphere(p-scale*vec3(-1.6,0.35,0.7), scale*0.15);
+    float tail = sdCone(p, scale*0.8,scale*2., scale*vec3(1.5, 0., 0.), vec3(-1.,0.,0.0));
+    float tailEnd = sdEllipsoid2(p-scale*vec3(3.4,0.,0), scale*float3(0.2,.8,.2));
+    float minval = min(min(min(min(body,eye1), eye2), leg1),leg2);
+    float minvalLowerBody = min(tailEnd, tail);
+    minval = min(minval, min(botfin, topfin));
+    minval = min(minval, minvalLowerBody);
+    if(minval == body || minval == leg1 || minval == leg2 || minval == tail || minval == tailEnd){ where = 0;}
+    else if(minval == topfin || minval == botfin){where = 2;}
+    else{ where = 1;};
+    return minval;
+}
+
+float LinearSpline(float t)
+{
+float val0 = 0.;
+float val1 = 1.;
+float val2 = 0.;
+float val3 = -1.;
+float val4 = 0.;
+float w = 0.25;
+if(t < 0.25){return (1.-(t/w))*val0+val1*(t/w);}
+if(t < 0.5){return (1.-((t-0.25)/w))*val1+val2*((t-0.25)/w);}
+if(t < 0.75){return (1.-((t-0.5)/w))*val2+val3*((t-0.5)/w);}
+return (1.-((t-0.75)/w))*val3+val4*((t-0.75)/w);
+}
+
+float3 MoveTail(float t, float3 no, float3 dNo, float3 pos)
+{  
+    mat3 rotate = RotateToAxis(vec3(1,0,0),dNo);
+    pos = rotate*(pos + no);
+    
+    
+    float3 fishPos0 = pos;
+    float3 fishPosY = normalize(rotate*(vec3(0,1,0)));
+    float w = mod(0.5*t,1.);
+
+    float theta = 0.1*PI*LinearSpline(w);
+    theta = pos.x < 3. ? exp(-(pos.x-3.)*(pos.x-3.))*theta : theta;
+    
+     mat3 rot = RotateAroundAxis(fishPosY,theta);
+     float3 movedTail = rot*fishPos0;
+
+    return movedTail;
+}
+
+  float GetDist(float3 p, float t, out int where) {
+    float h = mod(t,20.);
+    float3 move1 = MoveTail(t, float3(6.*cos(0.5*h),10.*(1.-(h/20.))-10.*(h/20.),-6.*sin(0.5*h))
+    ,normalize(float3(-3.*sin(0.5*h),0.,-3.*cos(0.5*h))), p);
+    float dFish1 = sdFish(move1, 1., t, where);
+    int alt = 0;
+    
+    float3 move2 = MoveTail(t, float3(4.*cos(0.75*t),0.,-4.*sin(0.75*t))
+    ,normalize(float3(-4.*0.75*sin(0.75*t),0.,-4.*0.75*cos(0.75*t))), p);
+    float dFish2 = sdFish(move2, 0.75, t, alt);
+    float minval = min(dFish1, dFish2);
+    if(minval == dFish2)
+    {
+        where = alt;
+    }
+    return minval;
+}
+
+  float Raymarch(float3 ro, float3 rd, float t, out int where) {
+    where = 0;
+    float dO = 0.;
+    float dS;
+    for (int i = 0; i < MAX_STEPS; i+=1) {
+        float3 p = ro + rd * dO;
+        dS = GetDist(p, t, where);
+        dO += dS;
+        if (dS<SURF_DIST || dO>MAX_DIST) break;
+    }
+    return dO;
+}
+
+float3 GetNormal(float3 p, float t) {
+    float2 e = float2(1e-2, 0.);
+    int dummy;
+    float3 n = GetDist(p, t, dummy) - float3(
+        GetDist(p-e.xyy, t, dummy),
+        GetDist(p-e.yxy, t, dummy),
+        GetDist(p-e.yyx, t, dummy)
+    );
+
+    return normalize(n);
+}
+
+float CalculateAO(float3 p, float3 n, float t) {
+    float d = 0.6;
+    int dummy;
+    return smoothstep(0.,d,GetDist(p + n*d, t, dummy));
+}
+
+float4 scene(float3 ro,float3 rd, float t)
+{
+    float4 col = float4(1);
+    int where = 0;
+    float d = Raymarch(ro, rd, t, where);
+    float3 light1Dir = normalize(float3(0.3, 4.5, 0.4));
+    float3 light1Color = float3(0.9, 0.9, 0.9);
+    float3 bodyCol = float3(0.125, 0.831, 0.972);
+    float3 finCol = float3(0.090, 0.572, 0.670);
+    float3 eyeCol = float3(0.,0,0);
+    if (d < MAX_DIST) {
+        float3 p = ro + d * rd; 
+        float3 n = GetNormal(p, t);
+        col.rgb = where == 0 ? bodyCol : where == 1 ? eyeCol : finCol;
+        col.rgb += pow(saturate(dot(reflect(rd, n), light1Dir)), 0.35) * light1Color * 0.05;
+        col.rgb *= CalculateAO(p, n, t) * 0.3 + 0.5;
+    }
+    else
+    {
+        float3 bg = lerp(float3(0.733, 0.870, 0.905), float3(0.568, 0.823, 0.933), rd.z);
+        col.rgb = bg;
+    }
+    return col;
+}
+
+float3 GetRayDir(vec2 uv, vec3 p) {
+    vec3 f = normalize(-p),
+        r = normalize(cross(vec3(0,1,0), f)),
+        u = cross(f,r),
+        c = p+f,
+        i = c + uv.x*r + uv.y*u,
+        d = normalize(i-p);
+    return d;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
+{
+    vec2 uv = (fragCoord-.5*iResolution.xy)/iResolution.y;
+    vec2 m = (iMouse.xy-.5*iResolution.xy)/iResolution.xy;    
+    
+    vec3 ro = vec3(0, 8, -8);
+    ro.yz *= Rot(-m.y*3.14);
+    ro.xz *= Rot(-m.x*6.2831);
+    vec3 rd = GetRayDir(uv, ro);
+    fragColor = scene(ro, rd, iTime);
+    //fragColor = vec4(0.733, 0.870, 0.905, 1.0);
+}
+
+  void main() {
+      mainImage(gl_FragColor, gl_FragCoord.xy);
+    }
+</script>
+
+<!--<script type="text/javascript">
+    window.parent.postMessage('Level 1 completed', '*');
+</script>-->
+
+<script src="https://webglfundamentals.org/webgl/resources/webgl-utils.js"></script>
+<script src="app.js" fragmentshader="#fragment-shader-2d"></script>
+<script src="commonDefinitions.js"></script>
+</html>

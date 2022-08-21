@@ -1,7 +1,27 @@
 <!DOCTYPE html>
 <html>
+<head>
+    <link rel="stylesheet" href="styles.css">
+  <title>Happy Little Little Fish</title>
+</head>
 <body>
-<h1>Hello World</h1>
-<p>I'm hosted with GitHub Pages.</p>
+<p id="output"></p>
+<form name="change">
+ <SELECT NAME="options" ONCHANGE="document.getElementById('frame1').src = this.options[this.selectedIndex].value">
+  <option value="">Levels</option>
+  <option value="level1.html">Easy</option>
+  <option value="level2.html">Difficult</option>
+ </SELECT>
+</form>
+<br>
+<!-- <script type="text/javascript">
+  window.addEventListener('message', function (e) {
+    // Get the sent data
+    const data = e.data;
+    document.getElementById('output').innerHTML = data;
+});
+-->
+</script>
+<iframe class="iframe" id="frame1" src="" scrolling="yes" frameborder="0" width="800" height="800"></iframe>
 </body>
 </html>
